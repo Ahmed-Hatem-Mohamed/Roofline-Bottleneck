@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# Rebuildable artifacts (run `python train.py` to recreate the model)
+models/*.joblib
+results/dataset_used.csv
+
+# Local measurement outputs and hardware profiles (commit these deliberately if you want to share them)
+data/*.csv
+hw/*.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

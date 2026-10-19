@@ -1,0 +1,7 @@
+numpy
+pandas
+scikit-learn
+matplotlib
+# only for measure_gpu.py on a GPU machine:
+# torch (CUDA build)
+# Nsight Compute (ncu) on PATH
