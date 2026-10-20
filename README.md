@@ -6,6 +6,17 @@ analytical Roofline model misses?
 
     f(workload features, hardware features) -> {memory-bound, compute-bound [, mixed]}
 
+## Interactive demo (no GPU required)
+
+The fastest way to try the project is the Streamlit interface. It lets you enter a preset or custom architecture, define a supported AI kernel, and compare the analytical Roofline verdict with the simulator-trained ML verdict. It also displays the Roofline plot, structural heuristics, optimization suggestions, and what-if changes such as 2× compute or 2× memory bandwidth.
+
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+The app trains its small classifier in memory from the built-in simulator on first launch (typically a few seconds on CPU); it does not require a GPU, pretrained model file, or downloaded real-data dataset. The generated `models/*.joblib` files are intentionally not included in the source release; use `python train.py` if you also want to run the command-line classifier. **The ML bottleneck verdict is learned from simulated labels, not measured physical bottleneck labels.** Use it as a working demonstration of the workflow, not as proof that the model predicts real hardware better than Roofline. The what-if speed-ups are idealized Roofline bounds, not performance guarantees.
+
 ## The predictor (`predict.py`)
 
 Give it hardware specs and a workload; it prints a Roofline analysis, an ML verdict with
@@ -34,6 +45,53 @@ batch, fusion) and ranked optimisations with Roofline upper-bound speed-ups (nev
 granularity, not whole networks; the ML verdict is only as real as the training labels (below);
 inputs far outside the training hardware range trigger a warning.
 
+## The real-data model (`predict_real.py`) - trained on measurements, not a simulator
+
+Data: [PipeWeave](https://github.com/zksainx/pipeweave) measured kernel latencies (arXiv 2601.14910;
+repo is Apache-2.0, **the dataset's own license is not stated - cite the paper and check with the authors
+before redistributing**). 452,120 kernels on 11 NVIDIA GPUs (A100, A40, H100, H20, H200, H800, L20, L40,
+RTX 6000 Ada, RTX A6000, RTX PRO 6000): BF16 GEMM, FP8 GEMM, attention (FA2/FA3), RMSNorm, SiLU*Mul, fused-MoE.
+`gemm_train.csv` (131 MB, Git LFS) could not be downloaded in my environment; `fetch_real_data.py` pulls it if
+you have git-lfs, and `train_real.py` then uses it automatically.
+
+    python fetch_real_data.py      # downloads the CSVs to data/real/ (git-ignored)
+    python train_real.py           # ~12 min on a 2-core machine; saves models/real_efficiency.joblib
+    python make_real_figs.py
+    python predict_real.py --gpu H100 --op gemm --M 4096 --N 4096 --K 4096
+
+**What it learns:** not a bottleneck label (the data has runtimes only, and a label derived from runtime plus
+datasheet peaks would just reproduce Roofline). It learns *how far below its Roofline a kernel runs*:
+`y = log10(measured time / Roofline ideal time)`, from shape, FLOPs, bytes, peak, bandwidth and SM count.
+`predict_real.py` outputs the Roofline side, predicted time with an 80% interval, predicted efficiency, and the
+validation numbers for that op.
+
+**Results** (median relative error of predicted kernel time; lower is better; all numbers cross-validated):
+
+| Test | Plain Roofline | Per-op constant efficiency | Learned model |
+|---|---|---|---|
+| New shapes, known GPUs | 58% | 25% | **3.3%** (96% within 25%; 80% interval covers 79%) |
+| New GPU (siblings in training) | 58% | 28% | **12.8%** (76% within 25%) |
+| New architecture (whole family held out) | 58% | 27% | **21.3%** (56% within 25%) |
+
+Honest reading:
+* Interpolation (new shapes on known hardware) is very good. Hardware extrapolation is much weaker:
+  on a new architecture the model beats a "constant efficiency per op" guess only modestly, and for plain BF16
+  GEMM it does **not** beat it (19% vs 17%). Its gains come mostly from small, latency-bound kernels.
+* The 80% intervals are **not trustworthy on new hardware**: they cover only ~27% of truths on unseen
+  architectures (45% on unseen GPUs). They are calibrated only for new shapes on known GPUs.
+* "Unseen GPU" is optimistic because same-die siblings (H100/H200/H800, L20/L40/RTX 6000 Ada, A40/A6000) stay in
+  training; "unseen architecture" is the fair hardware test. Only 4 architectures exist in the data.
+* Efficiency is lowest *near the ridge point* for GEMM and attention (`results/real/figs/efficiency_vs_ratio.png`):
+  Roofline is least reliable exactly where compute and memory ceilings meet.
+* FLOP/byte formulas are analytic and some are assumptions (see `OP_NOTES` in `rooflinelab/realdata.py` and
+  the `predict_real.py` output). GEMM/FP8 match the dataset's own `overall_perf` (median ratio 1.00); MoE,
+  RMSNorm and SiLU*Mul do not track it, so treat those ops' *absolute* efficiency with caution (the model
+  still learns their actual times). SiLU*Mul shows efficiency >100% because small tensors stay in L2.
+* RTX 6000 Ada's listed tensor peak looks doubled (it delivers the same TFLOPS as the L40 on identical GEMMs),
+  so its peak is halved (`PEAK_FIX`). This is an inference from the data, not vendor-confirmed.
+* **Domain limits:** tensor-core GPUs, BF16/FP8 kernels. `predict_real.py` refuses GEMM/attention/MoE for GPUs
+  without tensor cores (e.g. GTX 1650 Ti); use `predict.py` there. Hardware outside the training range triggers a warning.
+
 ## Your GTX 1650 Ti workflow (getting real numbers)
 
 1. `python detect_specs.py --out hw/my_gpu.json` - needs PyTorch+CUDA, no Nsight. Measures the FP32/FP16
@@ -57,7 +115,8 @@ Caveat: one GPU can calibrate the model for that GPU but cannot show generalisat
 |---|---|
 | Roofline baseline, features, 5-model ladder, experiments A/B/C, figures | Implemented and run |
 | `predict.py`, `train.py`, advisor | Implemented and tested on CPU with simulated labels |
-| Labels in `results/` and the shipped `models/model.joblib` | **Simulated** (`rooflinelab/simulate.py`), not hardware measurements |
+| Labels in `results/` (top level) and `models/model.joblib` | **Simulated** (`rooflinelab/simulate.py`), not hardware measurements |
+| `predict_real.py`, `train_real.py`, `results/real/` | **Real measured data** (PipeWeave, 452k kernels, 11 GPUs); formulas partly assumed; no GPU of yours involved |
 | `measure_gpu.py`, `detect_specs.py` | Written, **never run on a GPU** (parser unit-tested on a synthetic CSV) |
 | Hardware spec table (`hw_specs.py`) | Entered from memory; **verify against vendor datasheets** (1650 Ti is a laptop part; clocks/memory vary) |
 
@@ -127,8 +186,13 @@ Observations (all conditional on the simulator):
     rooflinelab/experiments.py  model ladder + splits + metrics
     rooflinelab/advisor.py      Roofline stats, ML verdict, what-if, optimisation advice, report
     rooflinelab/plots.py        figures
-    predict.py                  CLI: hardware specs + workload -> report
+    predict.py                  CLI: hardware specs + workload -> report (simulated-label classifier; any GPU)
     train.py                    trains/saves models/model.joblib (simulated, or + real CSVs)
+    predict_real.py             CLI: learned time/efficiency prediction from REAL data (tensor-core GPUs)
+    train_real.py               trains + cross-validates models/real_efficiency.joblib
+    fetch_real_data.py          downloads the PipeWeave CSVs into data/real/
+    make_real_figs.py           figures in results/real/figs/
+    rooflinelab/realdata.py     loader: analytic FLOPs/bytes/peak per op, efficiency target
     detect_specs.py             measures your GPU's achievable ceilings -> hw/*.json (untested on hardware)
     measure_gpu.py              Nsight Compute label collection (untested on hardware)
     run_all.py                  research experiments (Roofline vs ML ladder, A/B/C)

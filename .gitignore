@@ -18,3 +18,8 @@ hw/*.json
 Thumbs.db
 .vscode/
 .idea/
+
+# Downloaded real dataset (re-fetch with fetch_real_data.py)
+data/real/
+data/pipeweave_repo/
+results/real/cv_predictions.csv.gz

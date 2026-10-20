@@ -2,6 +2,9 @@ numpy
 pandas
 scikit-learn
 matplotlib
-# only for measure_gpu.py on a GPU machine:
+streamlit>=1.40
+pytest>=8.0
+
+# Optional: only needed for real GPU measurements, not for the interactive demo.
 # torch (CUDA build)
 # Nsight Compute (ncu) on PATH
