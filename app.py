@@ -71,7 +71,9 @@ def build_kernel() -> dict[str, Any]:
         c = st.columns(4)
         for col, name, default in zip(c, ["M", "N", "K", "Batch"], [4096, 4096, 4096, 1]):
             with col:
-                params[name.lower()] = positive_int(name, default, f"gemm_{name}")
+                params[name if name != "Batch" else "batch"] = positive_int(
+                    name, default, f"gemm_{name}"
+                )
     elif op == "conv":
         c = st.columns(3)
         for col, name, default in zip(c, ["N (batch)", "C (input channels)", "H (input height/width)"], [32, 256, 14]):
